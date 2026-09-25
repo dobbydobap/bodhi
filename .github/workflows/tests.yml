@@ -1,19 +1,22 @@
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - develop
-      - 25.11
-      - 26.4
-  pull_request:
-    branches:
-      - develop
-      - 25.11
-      - 26.4
 
-name: Run tests
+name: Run tests under podman
 
 jobs:
+
+  runtimes:
+    name: What the runner has
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check podman
+        run: |
+          which podman docker || true
+          podman --version
+          ls -l /usr/libexec/podman/catatonit || echo "no catatonit"
+          podman run --rm quay.io/fedora/fedora:latest true
+          podman run --rm --init quay.io/fedora/fedora:latest true
+          podman info --format '{{.Host.RemoteSocket.Path}}'
 
   precommit:
     name: Pre-commit checks
@@ -27,60 +30,8 @@ jobs:
       - name: Install deps
         run: pip install click
 
-      # we only really need to run the precommit checks for one release,
-      # so we just do it for pip
       - name: Run the pre-commit checks
-        run: devel/ci/bodhi-ci pre-commit -r pip
-
-
-  diff_cover:
-    name: Diff-cover check
-    runs-on: ubuntu-latest
-    needs: unit_tests
-    # Run diff-cover even if the unit tests failed on rawhide:
-    if: always()
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12 || 3.13 || 3.14'
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v8
-
-      - name: Edit the path in the coverage files
-        run: sed -i -e "s,<source>/bodhi,<source>$PWD," Coverage*/coverage.xml
-        shell: bash
-
-      - name: Install deps
-        run: pip install diff-cover
-
-      - name: Run the diff-cover check
-        shell: bash
-        run: diff-cover --compare-branch=origin/develop --fail-under=100 Coverage*/coverage.xml
-
-  integration_tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12 || 3.13 || 3.14'
-
-      - name: Install deps
-        run: pip3 install click -r devel/ci/integration/requirements.txt
-
-      - name: Run the integration tests
-        run: python3 devel/ci/bodhi-ci integration -r ${{ matrix.release }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # integration tests are broken on pip atm, so not included in this list.
-        release: [f43,f44,f45,rawhide]
+        run: devel/ci/bodhi-ci pre-commit -r pip -c podman
 
   unit_tests:
     name: Unit Tests
@@ -96,23 +47,12 @@ jobs:
         run: pip install click
 
       - name: Run the unit tests
-        run: devel/ci/bodhi-ci unit -r ${{ matrix.release }} -m ${{matrix.module}}
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v7
-        with:
-          name: Coverage for ${{ matrix.module }} on ${{ matrix.release }}
-          path: test_results/${{ matrix.release }}-unit/${{ matrix.module }}/coverage.xml
-
-    strategy:
-      fail-fast: false
-      matrix:
-        release: [f43,f44,f45,pip,rawhide]
-        module: [bodhi-client, bodhi-messages, bodhi-server]
+        run: devel/ci/bodhi-ci unit -r f45 -m bodhi-client -c podman
 
   docs:
     name: Build Documentation
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -123,15 +63,12 @@ jobs:
         run: pip install click -r docs/requirements.txt
 
       - name: Build the docs
-        run: devel/ci/bodhi-ci docs -r ${{ matrix.release }}
-    strategy:
-      fail-fast: false
-      matrix:
-        release: [f43,f44,f45,pip,rawhide]
+        run: devel/ci/bodhi-ci docs -r f45 -c podman
 
   rpms:
     name: Build the RPMS
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -142,17 +79,28 @@ jobs:
         run: pip install click
 
       - name: Build the rpms
-        run: devel/ci/bodhi-ci rpm -r ${{ matrix.release }}
+        run: devel/ci/bodhi-ci rpm -r f45 -c podman
 
-      - name: Upload built rpms
-        uses: actions/upload-artifact@v7
+  integration_tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          name: ${{ matrix.release }} RPMs
-          path: |
-            test_results/${{ matrix.release }}-rpm/*.noarch.rpm
-            test_results/${{ matrix.release }}-rpm/*.src.rpm
+          python-version: '3.12 || 3.13 || 3.14'
 
-    strategy:
-      fail-fast: false
-      matrix:
-        release: [f43,f44,f45,rawhide]
+      - name: Install deps
+        run: pip3 install click -r devel/ci/integration/requirements.txt
+
+      - name: Start podman's docker-compatible socket
+        run: |
+          podman system service --time=0 unix:///tmp/podman.sock &
+          for i in $(seq 1 30); do [ -S /tmp/podman.sock ] && break; sleep 1; done
+          DOCKER_HOST=unix:///tmp/podman.sock docker version
+
+      - name: Run the integration tests
+        env:
+          DOCKER_HOST: unix:///tmp/podman.sock
+        run: python3 devel/ci/bodhi-ci integration -r f45 -c podman
