@@ -22,9 +22,9 @@ import os
 import uuid
 
 import pytest
-from conu import DockerBackend, PodmanBackend
+from conu import DockerBackend
 
-from .conu_ext import DockerNetwork, PodmanNetwork
+from .conu_ext import DockerNetwork
 
 multiprocessing.set_start_method("fork")
 
@@ -34,16 +34,13 @@ def docker_backend():
     """Fixture yielding a Conu Docker backend.
 
     Yields:
-        conu.DockerBackend or conu.PodmanBackend: The container backend.
+        conu.DockerBackend: The container backend.
     """
     # Redefined to set the scope
     runtime = os.environ.get("CONTAINER_RUNTIME", "docker")
-    if runtime == "podman":
-        backend_class = PodmanBackend
-        network_class = PodmanNetwork
-        # Podman support is still unstable: https://github.com/user-cont/conu/issues/388
-        raise ValueError("Running the integration tests with podman is not supported yet.")
-    elif runtime == "docker":
+    if runtime in ("docker", "podman"):
+        # podman serves the docker API, so the docker backend drives both. For podman,
+        # DOCKER_HOST must point at the podman socket.
         backend_class = DockerBackend
         network_class = DockerNetwork
     else:

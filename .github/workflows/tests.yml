@@ -5,19 +5,6 @@ name: Run tests under podman
 
 jobs:
 
-  runtimes:
-    name: What the runner has
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check podman
-        run: |
-          which podman docker || true
-          podman --version
-          ls -l /usr/libexec/podman/catatonit || echo "no catatonit"
-          podman run --rm quay.io/fedora/fedora:latest true
-          podman run --rm --init quay.io/fedora/fedora:latest true
-          podman info --format '{{.Host.RemoteSocket.Path}}'
-
   precommit:
     name: Pre-commit checks
     runs-on: ubuntu-latest
@@ -32,54 +19,6 @@ jobs:
 
       - name: Run the pre-commit checks
         run: devel/ci/bodhi-ci pre-commit -r pip -c podman
-
-  unit_tests:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12 || 3.13 || 3.14'
-
-      - name: Install deps
-        run: pip install click
-
-      - name: Run the unit tests
-        run: devel/ci/bodhi-ci unit -r f45 -m bodhi-client -c podman
-
-  docs:
-    name: Build Documentation
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12 || 3.13 || 3.14'
-
-      - name: Install deps
-        run: pip install click -r docs/requirements.txt
-
-      - name: Build the docs
-        run: devel/ci/bodhi-ci docs -r f45 -c podman
-
-  rpms:
-    name: Build the RPMS
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12 || 3.13 || 3.14'
-
-      - name: Install deps
-        run: pip install click
-
-      - name: Build the rpms
-        run: devel/ci/bodhi-ci rpm -r f45 -c podman
 
   integration_tests:
     name: Integration Tests
