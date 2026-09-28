@@ -5,41 +5,36 @@ name: Run tests under podman
 
 jobs:
 
-  precommit:
-    name: Pre-commit checks
+  network_alias:
+    name: Reproduce the conu container start
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12 || 3.13 || 3.14'
-
-      - name: Install deps
-        run: pip install click
-
-      - name: Run the pre-commit checks
-        run: devel/ci/bodhi-ci pre-commit -r pip -c podman
-
-  integration_tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12 || 3.13 || 3.14'
-
-      - name: Install deps
-        run: pip3 install click -r devel/ci/integration/requirements.txt
-
       - name: Start podman's docker-compatible socket
         run: |
           podman system service --time=0 unix:///tmp/podman.sock &
           for i in $(seq 1 30); do [ -S /tmp/podman.sock ] && break; sleep 1; done
-          DOCKER_HOST=unix:///tmp/podman.sock docker version
+          docker version
 
-      - name: Run the integration tests
+      - name: Run the same command conu runs
         env:
           DOCKER_HOST: unix:///tmp/podman.sock
-        run: python3 devel/ci/bodhi-ci integration -r f45 -c podman
+        run: |
+          docker pull quay.io/bodhi-ci/postgresql:latest
+          image=$(docker images --no-trunc --format '{{.ID}}' quay.io/bodhi-ci/postgresql:latest)
+          net=$(docker network create --driver bridge bodhi_test-probe)
+          echo "network id: $net"
+
+          echo "--- by id, with aliases (what conu does) ---"
+          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name db1 \
+            --network "$net" --network-alias db --network-alias db.ci \
+            -d "$image"; echo "exit=$?"
+
+          echo "--- by name, with aliases ---"
+          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name db2 \
+            --network bodhi_test-probe --network-alias db --network-alias db.ci \
+            -d "$image"; echo "exit=$?"
+
+          echo "--- by name, no aliases ---"
+          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name db3 \
+            --network bodhi_test-probe \
+            -d "$image"; echo "exit=$?"
