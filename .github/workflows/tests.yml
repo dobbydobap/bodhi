@@ -5,8 +5,8 @@ name: Run tests under podman
 
 jobs:
 
-  network_alias:
-    name: Reproduce the conu container start
+  container_start:
+    name: Bisect the conu container start
     runs-on: ubuntu-latest
     steps:
       - name: Start podman's docker-compatible socket
@@ -15,26 +15,30 @@ jobs:
           for i in $(seq 1 30); do [ -S /tmp/podman.sock ] && break; sleep 1; done
           docker version
 
-      - name: Run the same command conu runs
+      - name: Bisect the flags conu passes
         env:
           DOCKER_HOST: unix:///tmp/podman.sock
         run: |
-          docker pull quay.io/bodhi-ci/postgresql:latest
+          set +e
+          docker pull -q quay.io/bodhi-ci/postgresql:latest
           image=$(docker images --no-trunc --format '{{.ID}}' quay.io/bodhi-ci/postgresql:latest)
           net=$(docker network create --driver bridge bodhi_test-probe)
-          echo "network id: $net"
+          mkdir -p /tmp/conu-probe
 
-          echo "--- by id, with aliases (what conu does) ---"
-          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name db1 \
-            --network "$net" --network-alias db --network-alias db.ci \
-            -d "$image"; echo "exit=$?"
+          echo "=== A: everything conu passes ==="
+          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name dbA \
+            --network "$net" --network-alias db --network-alias db.ci -d \
+            --cidfile=/tmp/conu-probe/cidA -l conu.test_artifact "$image"
+          echo "exit=$?"
 
-          echo "--- by name, with aliases ---"
-          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name db2 \
-            --network bodhi_test-probe --network-alias db --network-alias db.ci \
-            -d "$image"; echo "exit=$?"
+          echo "=== B: drop --cidfile ==="
+          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name dbB \
+            --network "$net" --network-alias db --network-alias db.ci -d \
+            -l conu.test_artifact "$image"
+          echo "exit=$?"
 
-          echo "--- by name, no aliases ---"
-          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name db3 \
-            --network bodhi_test-probe \
-            -d "$image"; echo "exit=$?"
+          echo "=== C: drop the bare label ==="
+          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name dbC \
+            --network "$net" --network-alias db --network-alias db.ci -d \
+            --cidfile=/tmp/conu-probe/cidC "$image"
+          echo "exit=$?"
