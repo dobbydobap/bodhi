@@ -5,40 +5,39 @@ name: Run tests under podman
 
 jobs:
 
-  container_start:
-    name: Bisect the conu container start
+  image_ref:
+    name: How podman resolves the image reference
     runs-on: ubuntu-latest
     steps:
       - name: Start podman's docker-compatible socket
         run: |
           podman system service --time=0 unix:///tmp/podman.sock &
           for i in $(seq 1 30); do [ -S /tmp/podman.sock ] && break; sleep 1; done
-          docker version
 
-      - name: Bisect the flags conu passes
+      - name: Pull via the API the way conu does, then run by each reference
         env:
           DOCKER_HOST: unix:///tmp/podman.sock
         run: |
           set +e
-          docker pull -q quay.io/bodhi-ci/postgresql:latest
-          image=$(docker images --no-trunc --format '{{.ID}}' quay.io/bodhi-ci/postgresql:latest)
-          net=$(docker network create --driver bridge bodhi_test-probe)
-          mkdir -p /tmp/conu-probe
+          python3 -m pip install -q docker
+          python3 - <<'PY'
+          import docker
+          c = docker.APIClient(version="auto")
+          for line in c.pull("quay.io/bodhi-ci/postgresql", tag="latest", stream=True, decode=True):
+              pass
+          i = c.inspect_image("quay.io/bodhi-ci/postgresql:latest")
+          print("inspect Id   =", i["Id"])
+          print("RepoDigests  =", i.get("RepoDigests"))
+          print("RepoTags     =", i.get("RepoTags"))
+          open("/tmp/imgid", "w").write(i["Id"])
+          PY
 
-          echo "=== A: everything conu passes ==="
-          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name dbA \
-            --network "$net" --network-alias db --network-alias db.ci -d \
-            --cidfile=/tmp/conu-probe/cidA -l conu.test_artifact "$image"
-          echo "exit=$?"
+          id=$(cat /tmp/imgid)
+          echo "=== run by inspect Id (what conu uses) ==="
+          docker run --rm -d --name r1 "$id"; echo "exit=$?"
 
-          echo "=== B: drop --cidfile ==="
-          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name dbB \
-            --network "$net" --network-alias db --network-alias db.ci -d \
-            -l conu.test_artifact "$image"
-          echo "exit=$?"
+          echo "=== run by tag ==="
+          docker run --rm -d --name r2 quay.io/bodhi-ci/postgresql:latest; echo "exit=$?"
 
-          echo "=== C: drop the bare label ==="
-          docker run --rm -e POSTGRES_HOST_AUTH_METHOD=trust --name dbC \
-            --network "$net" --network-alias db --network-alias db.ci -d \
-            --cidfile=/tmp/conu-probe/cidC "$image"
-          echo "exit=$?"
+          echo "=== what podman stores ==="
+          podman images --no-trunc
