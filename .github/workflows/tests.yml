@@ -6,7 +6,7 @@ name: Run tests under podman
 jobs:
 
   image_ref:
-    name: How podman resolves the image reference
+    name: Which image reference podman accepts
     runs-on: ubuntu-latest
     steps:
       - name: Start podman's docker-compatible socket
@@ -14,30 +14,22 @@ jobs:
           podman system service --time=0 unix:///tmp/podman.sock &
           for i in $(seq 1 30); do [ -S /tmp/podman.sock ] && break; sleep 1; done
 
-      - name: Pull via the API the way conu does, then run by each reference
+      - name: Compare the three references for one image
         env:
           DOCKER_HOST: unix:///tmp/podman.sock
         run: |
           set +e
-          python3 -m pip install -q docker
-          python3 - <<'PY'
-          import docker
-          c = docker.APIClient(version="auto")
-          for line in c.pull("quay.io/bodhi-ci/postgresql", tag="latest", stream=True, decode=True):
-              pass
-          i = c.inspect_image("quay.io/bodhi-ci/postgresql:latest")
-          print("inspect Id   =", i["Id"])
-          print("RepoDigests  =", i.get("RepoDigests"))
-          print("RepoTags     =", i.get("RepoTags"))
-          open("/tmp/imgid", "w").write(i["Id"])
-          PY
+          docker pull -q quay.io/bodhi-ci/postgresql:latest
+          id=$(docker inspect --format '{{.Id}}' quay.io/bodhi-ci/postgresql:latest)
+          bare=${id#sha256:}
+          echo "Id   = $id"
+          echo "bare = $bare"
 
-          id=$(cat /tmp/imgid)
-          echo "=== run by inspect Id (what conu uses) ==="
-          docker run --rm -d --name r1 "$id"; echo "exit=$?"
+          echo "=== 1. sha256-prefixed Id, what conu passes ==="
+          docker run --rm -d --name c1 "$id"; echo "exit=$?"
 
-          echo "=== run by tag ==="
-          docker run --rm -d --name r2 quay.io/bodhi-ci/postgresql:latest; echo "exit=$?"
+          echo "=== 2. bare hex Id ==="
+          docker run --rm -d --name c2 "$bare"; echo "exit=$?"
 
-          echo "=== what podman stores ==="
-          podman images --no-trunc
+          echo "=== 3. repository tag ==="
+          docker run --rm -d --name c3 quay.io/bodhi-ci/postgresql:latest; echo "exit=$?"
